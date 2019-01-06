@@ -51,6 +51,7 @@ def process_predicts(predicts):
 
   return xmin, ymin, xmax, ymax, class_num
 
+
 common_params = {'image_size': 448, 'num_classes': 20, 
                 'batch_size':1}
 net_params = {'cell_size': 7, 'boxes_per_cell':2, 'weight_decay': 0.0005}
