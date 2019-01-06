@@ -15,7 +15,7 @@ classes_num = {'aeroplane': 0, 'bicycle': 1, 'bird': 2, 'boat': 3, 'bottle': 4, 
     'sofa': 17, 'train': 18, 'tvmonitor': 19}
 
 YOLO_ROOT = os.path.abspath('./')
-DATA_PATH = os.path.join(YOLO_ROOT, 'data/VOCdevkit2007')
+DATA_PATH = os.path.join(YOLO_ROOT, 'data/VOCdevkit')
 OUTPUT_PATH = os.path.join(YOLO_ROOT, 'data/pascal_voc.txt')
 
 def parse_xml(xml_file):
