@@ -25,6 +25,7 @@ class YoloTinyNet(Net):
     self.weight_decay = float(net_params['weight_decay'])
 
     if not test:
+      # define the loss wright of different kind of loss
       self.object_scale = float(net_params['object_scale'])
       self.noobject_scale = float(net_params['noobject_scale'])
       self.class_scale = float(net_params['class_scale'])
@@ -79,25 +80,23 @@ class YoloTinyNet(Net):
     temp_conv = self.conv2d('conv' + str(conv_num), temp_conv, [3, 3, 1024, 1024], stride=1)
     conv_num += 1 
 
-    temp_conv = tf.transpose(temp_conv, (0, 3, 1, 2))
+    temp_conv = tf.transpose(temp_conv, (0, 3, 1, 2)) #(N,H,W,C)=>(N,C,H,W)
 
     #Fully connected layer
     local1 = self.local('local1', temp_conv, self.cell_size * self.cell_size * 1024, 256)
-
     local2 = self.local('local2', local1, 256, 4096)
- 
     local3 = self.local('local3', local2, 4096, self.cell_size * self.cell_size * (self.num_classes + self.boxes_per_cell * 5), leaky=False, pretrain=False, train=True)
 
+    #reshape the output tensor
     n1 = self.cell_size * self.cell_size * self.num_classes
-
     n2 = n1 + self.cell_size * self.cell_size * self.boxes_per_cell
 
     class_probs = tf.reshape(local3[:, 0:n1], (-1, self.cell_size, self.cell_size, self.num_classes))
-    scales = tf.reshape(local3[:, n1:n2], (-1, self.cell_size, self.cell_size, self.boxes_per_cell))
-    boxes = tf.reshape(local3[:, n2:], (-1, self.cell_size, self.cell_size, self.boxes_per_cell * 4))
+    scales = tf.reshape(local3[:, n1:n2], (-1, self.cell_size, self.cell_size, self.boxes_per_cell))   #objectness_prob
+    boxes = tf.reshape(local3[:, n2:], (-1, self.cell_size, self.cell_size, self.boxes_per_cell * 4))  #coordinate
 
-    local3 = tf.concat([class_probs, scales, boxes], 3)
-
+    local3 = tf.concat([class_probs, scales, boxes], axis=3)
+    
     predicts = local3
 
     return predicts
@@ -124,6 +123,7 @@ class YoloTinyNet(Net):
     intersection = rd - lu 
 
     inter_square = intersection[:, :, :, 0] * intersection[:, :, :, 1]
+    # inter_quare with shape [CELL_SIZE,CELL_SIZE,BOX_NUM]
 
     mask = tf.cast(intersection[:, :, :, 0] > 0, tf.float32) * tf.cast(intersection[:, :, :, 1] > 0, tf.float32)
     
@@ -152,7 +152,7 @@ class YoloTinyNet(Net):
     label = labels[num:num+1, :]
     label = tf.reshape(label, [-1])
 
-    #calculate objects  tensor [CELL_SIZE, CELL_SIZE]
+    #1.calculate objects tensor [CELL_SIZE, CELL_SIZE]
     min_x = (label[0] - label[2] / 2) / (self.image_size / self.cell_size)
     max_x = (label[0] + label[2] / 2) / (self.image_size / self.cell_size)
 
@@ -166,14 +166,15 @@ class YoloTinyNet(Net):
     max_y = tf.ceil(max_y)
 
     temp = tf.cast(tf.stack([max_y - min_y, max_x - min_x]), dtype=tf.int32)
-    objects = tf.ones(temp, tf.float32)
+    objects = tf.ones(temp, tf.float32) 
 
     temp = tf.cast(tf.stack([min_y, self.cell_size - max_y, min_x, self.cell_size - max_x]), tf.int32)
-    temp = tf.reshape(temp, (2, 2))
-    objects = tf.pad(objects, temp, "CONSTANT")
+    # the temp is the padding lines, with the order:top,down,left,right
 
-    #calculate objects  tensor [CELL_SIZE, CELL_SIZE]
-    #calculate responsible tensor [CELL_SIZE, CELL_SIZE]
+    temp = tf.reshape(temp, (2, 2))
+    objects = tf.pad(objects, temp, "CONSTANT") # object appears in those grid with value 1 (in the paper obj_i)
+
+    #2.calculate responsible tensor [CELL_SIZE, CELL_SIZE]
     center_x = label[0] / (self.image_size / self.cell_size)
     center_x = tf.floor(center_x)
 
@@ -184,15 +185,15 @@ class YoloTinyNet(Net):
 
     temp = tf.cast(tf.stack([center_y, self.cell_size - center_y - 1, center_x, self.cell_size -center_x - 1]), tf.int32)
     temp = tf.reshape(temp, (2, 2))
-    response = tf.pad(response, temp, "CONSTANT")
-    #objects = response
+    response = tf.pad(response, temp, "CONSTANT")  # the grid contains the label object center
 
-    #calculate iou_predict_truth [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
-    predict_boxes = predict[:, :, self.num_classes + self.boxes_per_cell:]
-    
+    #3.calculate iou_predict_truth [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
+    # shape of predict:[CELL_SIZE,CELL_SIZE,CLASS_NUM+BOX_NUM+BOX_NUM*4]
+    predict_boxes = predict[:, :, self.num_classes + self.boxes_per_cell:] #box coordinate
 
     predict_boxes = tf.reshape(predict_boxes, [self.cell_size, self.cell_size, self.boxes_per_cell, 4])
 
+    # convert 'normalized' [x,y,w,h] to original ones
     predict_boxes = predict_boxes * [self.image_size / self.cell_size, self.image_size / self.cell_size, self.image_size, self.image_size]
 
     base_boxes = np.zeros([self.cell_size, self.cell_size, 4])
@@ -201,18 +202,27 @@ class YoloTinyNet(Net):
       for x in range(self.cell_size):
         #nilboy
         base_boxes[y, x, :] = [self.image_size / self.cell_size * x, self.image_size / self.cell_size * y, 0, 0]
-    base_boxes = np.tile(np.resize(base_boxes, [self.cell_size, self.cell_size, 1, 4]), [1, 1, self.boxes_per_cell, 1])
-
+    
+    # expand to 2 boxes
+    base_boxes = np.tile(np.resize(base_boxes, [self.cell_size, self.cell_size, 1, 4]), [1, 1, self.boxes_per_cell, 1])   
+    
+    # convert 'offseted' [x,y] to original ones
     predict_boxes = base_boxes + predict_boxes
 
-    iou_predict_truth = self.iou(predict_boxes, label[0:4])
+    # ==now we got predict boxes with coordinate x,y,w,h with pixel scale==
+   
+
+    iou_predict_truth = self.iou(predict_boxes, label[0:4]) 
+    # iou_predict_truth with shape [CELL_SIZE,CELL_SIZE,BOX_NUM],and the element is IoU value
+
+
     #calculate C [cell_size, cell_size, boxes_per_cell]
     C = iou_predict_truth * tf.reshape(response, [self.cell_size, self.cell_size, 1])
 
     #calculate I tensor [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
-    I = iou_predict_truth * tf.reshape(response, (self.cell_size, self.cell_size, 1))
+    I = iou_predict_truth * tf.reshape(response, (self.cell_size, self.cell_size, 1)) 
     
-    max_I = tf.reduce_max(I, 2, keep_dims=True)
+    max_I = tf.reduce_max(I, 2, keep_dims=True) #get the box with max IoU
 
     I = tf.cast((I >= max_I), tf.float32) * tf.reshape(response, (self.cell_size, self.cell_size, 1))
 
@@ -228,21 +238,15 @@ class YoloTinyNet(Net):
 
     sqrt_w = tf.sqrt(tf.abs(label[2]))
     sqrt_h = tf.sqrt(tf.abs(label[3]))
-    #sqrt_w = tf.abs(label[2])
-    #sqrt_h = tf.abs(label[3])
+
 
     #calculate predict p_x, p_y, p_sqrt_w, p_sqrt_h 3-D [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
     p_x = predict_boxes[:, :, :, 0]
     p_y = predict_boxes[:, :, :, 1]
 
-    #p_sqrt_w = tf.sqrt(tf.abs(predict_boxes[:, :, :, 2])) * ((tf.cast(predict_boxes[:, :, :, 2] > 0, tf.float32) * 2) - 1)
-    #p_sqrt_h = tf.sqrt(tf.abs(predict_boxes[:, :, :, 3])) * ((tf.cast(predict_boxes[:, :, :, 3] > 0, tf.float32) * 2) - 1)
-    #p_sqrt_w = tf.sqrt(tf.maximum(0.0, predict_boxes[:, :, :, 2]))
-    #p_sqrt_h = tf.sqrt(tf.maximum(0.0, predict_boxes[:, :, :, 3]))
-    #p_sqrt_w = predict_boxes[:, :, :, 2]
-    #p_sqrt_h = predict_boxes[:, :, :, 3]
     p_sqrt_w = tf.sqrt(tf.minimum(self.image_size * 1.0, tf.maximum(0.0, predict_boxes[:, :, :, 2])))
     p_sqrt_h = tf.sqrt(tf.minimum(self.image_size * 1.0, tf.maximum(0.0, predict_boxes[:, :, :, 3])))
+
     #calculate truth p 1-D tensor [NUM_CLASSES]
     P = tf.one_hot(tf.cast(label[4], tf.int32), self.num_classes, dtype=tf.float32)
 
@@ -254,7 +258,7 @@ class YoloTinyNet(Net):
     #class_loss = tf.nn.l2_loss(tf.reshape(response, (self.cell_size, self.cell_size, 1)) * (p_P - P)) * self.class_scale
 
     #object_loss
-    object_loss = tf.nn.l2_loss(I * (p_C - C)) * self.object_scale
+    object_loss = tf.nn.l2_loss(I * (p_C - C)) * self.object_scale #p_C-C ,C is the IoU value,can be treat as the obejctness score
     #object_loss = tf.nn.l2_loss(I * (p_C - (C + 1.0)/2.0)) * self.object_scale
 
     #noobject_loss
@@ -291,7 +295,7 @@ class YoloTinyNet(Net):
       predict = predicts[i, :, :, :]
       label = labels[i, :, :]
       object_num = objects_num[i]
-      nilboy = tf.ones([7,7,2])
+      nilboy = tf.ones([7,7,2]) 
       tuple_results = tf.while_loop(self.cond1, self.body1, [tf.constant(0), object_num, [class_loss, object_loss, noobject_loss, coord_loss], predict, label, nilboy])
       for j in range(4):
         loss[j] = loss[j] + tuple_results[2][j]

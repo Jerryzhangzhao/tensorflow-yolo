@@ -110,3 +110,4 @@ class YoloSolver(Solver):
       if step % 5000 == 0:
         saver2.save(sess, self.train_dir + '/model.ckpt', global_step=step)
     sess.close()
+

@@ -1,4 +1,3 @@
-#import ConfigParser
 import configparser
 
 def process_config(conf_file):

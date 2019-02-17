@@ -39,9 +39,9 @@ class YoloNet(Net):
       predicts: 4-D tensor [batch_size, cell_size, cell_size, num_classes + 5 * boxes_per_cell]
     """
     conv_num = 1
+
     temp_conv = self.conv2d('conv' + str(conv_num), images, [7, 7, 3, 64], stride=2)
     conv_num += 1
-
 
     temp_pool = self.max_pool(temp_conv, [2, 2], 2)
 
@@ -123,18 +123,18 @@ class YoloNet(Net):
     Return:
       iou: 3-D tensor [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
     """
-    boxes1 = tf.pack([boxes1[:, :, :, 0] - boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] - boxes1[:, :, :, 3] / 2,
+    boxes1 = tf.stack([boxes1[:, :, :, 0] - boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] - boxes1[:, :, :, 3] / 2,
                       boxes1[:, :, :, 0] + boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] + boxes1[:, :, :, 3] / 2])
     boxes1 = tf.transpose(boxes1, [1, 2, 3, 0])
-    boxes2 =  tf.pack([boxes2[0] - boxes2[2] / 2, boxes2[1] - boxes2[3] / 2,
+    boxes2 =  tf.stack([boxes2[0] - boxes2[2] / 2, boxes2[1] - boxes2[3] / 2,
                       boxes2[0] + boxes2[2] / 2, boxes2[1] + boxes2[3] / 2])
 
-    #calculate the left up point
+    #calculate the left_up and right_down point
     lu = tf.maximum(boxes1[:, :, :, 0:2], boxes2[0:2])
     rd = tf.minimum(boxes1[:, :, :, 2:], boxes2[2:])
 
     #intersection
-    intersection = rd - lu 
+    intersection = rd - lu #[inter_width, inter_height]
 
     inter_square = intersection[:, :, :, 0] * intersection[:, :, :, 1]
 

@@ -11,72 +11,74 @@ classes_name =  ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
 
 
 def process_predicts(predicts):
-  p_classes = predicts[0, :, :, 0:20]
-  C = predicts[0, :, :, 20:22]
-  coordinate = predicts[0, :, :, 22:]
+    # predicts is a tensor with shape (N,grid_size,grid_size,30), 30=(4+1)*2+20
+    p_classes = predicts[0, :, :, 0:20]
+    C = predicts[0, :, :, 20:22]
+    coordinate = predicts[0, :, :, 22:]
+    print(predicts.shape)
 
-  p_classes = np.reshape(p_classes, (7, 7, 1, 20))
-  C = np.reshape(C, (7, 7, 2, 1))
+    p_classes = np.reshape(p_classes, (7, 7, 1, 20))
+    C = np.reshape(C, (7, 7, 2, 1))
 
-  P = C * p_classes
+    #combine_probability = Objectness_prob * Class_prob
+    P = C * p_classes
+    print(P.shape)
 
-  #print P[5,1, 0, :]
+    # find the index with max combine_probability
+    index = np.argmax(P)
+    index = np.unravel_index(index, P.shape)
 
-  index = np.argmax(P)
+    class_num = index[3]
 
-  index = np.unravel_index(index, P.shape)
+    coordinate = np.reshape(coordinate, (7, 7, 2, 4))
 
-  class_num = index[3]
+    max_coordinate = coordinate[index[0], index[1], index[2], :]
 
-  coordinate = np.reshape(coordinate, (7, 7, 2, 4))
+    xcenter = max_coordinate[0] #this is a offset value normalized by grid width
+    ycenter = max_coordinate[1]
+    w = max_coordinate[2] #the w is the bbox width normalized by image width
+    h = max_coordinate[3]
 
-  max_coordinate = coordinate[index[0], index[1], index[2], :]
+    xcenter = (index[1] + xcenter) * (448/7.0)
+    ycenter = (index[0] + ycenter) * (448/7.0)
 
-  xcenter = max_coordinate[0]
-  ycenter = max_coordinate[1]
-  w = max_coordinate[2]
-  h = max_coordinate[3]
+    w = w * 448
+    h = h * 448
 
-  xcenter = (index[1] + xcenter) * (448/7.0)
-  ycenter = (index[0] + ycenter) * (448/7.0)
+    xmin = xcenter - w/2.0
+    ymin = ycenter - h/2.0
 
-  w = w * 448
-  h = h * 448
+    xmax = xmin + w
+    ymax = ymin + h
 
-  xmin = xcenter - w/2.0
-  ymin = ycenter - h/2.0
-
-  xmax = xmin + w
-  ymax = ymin + h
-
-  return xmin, ymin, xmax, ymax, class_num
+    return xmin, ymin, xmax, ymax, class_num
 
 
-common_params = {'image_size': 448, 'num_classes': 20, 
-                'batch_size':1}
+common_params = {'image_size': 448, 'num_classes': 20, 'batch_size':1}
 net_params = {'cell_size': 7, 'boxes_per_cell':2, 'weight_decay': 0.0005}
 
+# network,input place holder and output tensor
 net = YoloTinyNet(common_params, net_params, test=True)
-
 image = tf.placeholder(tf.float32, (1, 448, 448, 3))
 predicts = net.inference(image)
 
 sess = tf.Session()
 
 np_img = cv2.imread('cat.jpg')
+height, width, channels = np_img.shape
+print(height, width, channels)
+
+
+# image preprocess
 resized_img = cv2.resize(np_img, (448, 448))
 np_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
-
-
 np_img = np_img.astype(np.float32)
-
 np_img = np_img / 255.0 * 2 - 1
 np_img = np.reshape(np_img, (1, 448, 448, 3))
 
-saver = tf.train.Saver(net.trainable_collection)
-
+# load model and reference
+saver = tf.train.Saver()
 saver.restore(sess, 'models/pretrain/yolo_tiny.ckpt')
-
 np_predict = sess.run(predicts, feed_dict={image: np_img})
 
 xmin, ymin, xmax, ymax, class_num = process_predicts(np_predict)

@@ -14,9 +14,9 @@ from yolo.dataset.dataset import DataSet
 
 class TextDataSet(DataSet):
   """TextDataSet
-  process text input file dataset 
-  text file format:
-    image_path xmin1 ymin1 xmax1 ymax1 class1 xmin2 ymin2 xmax2 ymax2 class2
+     process text input file dataset 
+     text file format:
+     image_path xmin1 ymin1 xmax1 ymax1 class1 xmin2 ymin2 xmax2 ymax2 class2
   """
 
   def __init__(self, common_params, dataset_params):
@@ -45,7 +45,7 @@ class TextDataSet(DataSet):
     for line in input_file:
       line = line.strip()
       ss = line.split(' ')
-      ss[1:] = [float(num) for num in ss[1:]]
+      ss[1:] = [float(num) for num in ss[1:]]  # list comprehension and fragement assignment
       self.record_list.append(ss)
 
     self.record_point = 0
@@ -88,7 +88,7 @@ class TextDataSet(DataSet):
     width_rate = self.width * 1.0 / w 
     height_rate = self.height * 1.0 / h 
 
-    image = cv2.resize(image, (self.height, self.width))
+    image = cv2.resize(image, (self.height, self.width)) #resize to (448,448)
 
     labels = [[0, 0, 0, 0, 0]] * self.max_objects
     i = 1
@@ -99,7 +99,8 @@ class TextDataSet(DataSet):
       xmax = record[i + 2]
       ymax = record[i + 3]
       class_num = record[i + 4]
-
+     
+      # covert the x,y,w,h to resized image size
       xcenter = (xmin + xmax) * 1.0 / 2 * width_rate
       ycenter = (ymin + ymax) * 1.0 / 2 * height_rate
 
@@ -137,7 +138,7 @@ class TextDataSet(DataSet):
       labels.append(label)
       objects_num.append(object_num)
     images = np.asarray(images, dtype=np.float32)
-    images = images/255 * 2 - 1
+    images = images/255 * 2 - 1  # convert the pixel value to [-1,1]
     labels = np.asarray(labels, dtype=np.float32)
     objects_num = np.asarray(objects_num, dtype=np.int32)
     return images, labels, objects_num
