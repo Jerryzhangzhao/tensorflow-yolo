@@ -6,6 +6,7 @@ sys.path.append('./')
 import yolo
 from yolo.utils.process_config import process_config
 
+# 使用OptionParser解析参数
 parser = OptionParser()
 parser.add_option("-c", "--conf", dest="configure",  
                   help="configure filename")
@@ -16,6 +17,7 @@ else:
   print('please sspecify --conf configure filename')
   exit(0)
 
+# 读取配置文件
 common_params, dataset_params, net_params, solver_params = process_config(conf_file)
 
 #yolo.dataset.text_dataset.TextDataSet ==>data process
