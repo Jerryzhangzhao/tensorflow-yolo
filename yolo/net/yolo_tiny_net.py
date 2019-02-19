@@ -115,19 +115,23 @@ class YoloTinyNet(Net):
     Return:
       iou: 3-D tensor [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
     """
+    # 将Bbox坐标由(x_center,y_center,w,h) 转为 (x_min, y_min, x_max, y_max)
     boxes1 = tf.stack([boxes1[:, :, :, 0] - boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] - boxes1[:, :, :, 3] / 2,
                       boxes1[:, :, :, 0] + boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] + boxes1[:, :, :, 3] / 2])
     boxes1 = tf.transpose(boxes1, [1, 2, 3, 0])
+    # 上面这两句stack+transpose的操作也可以写成一句:
+    # boxes1 = tf.stack([boxes1[:, :, :, 0] - boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] - boxes1[:, :, :, 3] / 2,
+    #                   boxes1[:, :, :, 0] + boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] + boxes1[:, :, :, 3] / 2],axis=3)
+
     boxes2 =  tf.stack([boxes2[0] - boxes2[2] / 2, boxes2[1] - boxes2[3] / 2,
                       boxes2[0] + boxes2[2] / 2, boxes2[1] + boxes2[3] / 2])
 
-    #calculate the left up point
+    # 计算重合区域的左上和右下顶点
     lu = tf.maximum(boxes1[:, :, :, 0:2], boxes2[0:2])
     rd = tf.minimum(boxes1[:, :, :, 2:], boxes2[2:])
 
     #intersection
-    intersection = rd - lu 
-
+    intersection = rd - lu
     inter_square = intersection[:, :, :, 0] * intersection[:, :, :, 1]
     # inter_quare with shape [CELL_SIZE,CELL_SIZE,BOX_NUM]
 
@@ -166,7 +170,7 @@ class YoloTinyNet(Net):
     min_y = (label[1] - label[3] / 2) / (self.image_size / self.cell_size)
     max_y = (label[1] + label[3] / 2) / (self.image_size / self.cell_size)
 
-    # 分别取整
+    # 分别取整得到格子坐标
     min_x = tf.floor(min_x)
     min_y = tf.floor(min_y)
     max_x = tf.ceil(max_x)
@@ -213,7 +217,7 @@ class YoloTinyNet(Net):
         #nilboy
         base_boxes[y, x, :] = [self.image_size / self.cell_size * x, self.image_size / self.cell_size * y, 0, 0]
     
-    # expand to 2 boxes
+    # 扩展为2个Bbox
     base_boxes = np.tile(np.resize(base_boxes, [self.cell_size, self.cell_size, 1, 4]), [1, 1, self.boxes_per_cell, 1])   
     
     # 将predict_boxes 由[x_offset,y_offset,w,h](单位为像素值)转换为[x,y,w,h](单位为像素值)
@@ -221,6 +225,7 @@ class YoloTinyNet(Net):
 
     # ==now we got predict boxes with coordinate x,y,w,h with pixel scale==
 
+    # 计算IoU
     iou_predict_truth = self.iou(predict_boxes, label[0:4]) 
     # iou_predict_truth with shape [CELL_SIZE,CELL_SIZE,BOX_NUM],and the element is IoU value
 
