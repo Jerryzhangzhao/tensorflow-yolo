@@ -130,22 +130,22 @@ class YoloTinyNet(Net):
     lu = tf.maximum(boxes1[:, :, :, 0:2], boxes2[0:2])
     rd = tf.minimum(boxes1[:, :, :, 2:], boxes2[2:])
 
-    #intersection
+    # 计算重叠区域面积
     intersection = rd - lu
     inter_square = intersection[:, :, :, 0] * intersection[:, :, :, 1]
-    # inter_quare with shape [CELL_SIZE,CELL_SIZE,BOX_NUM]
-
+    # predict box和label box也可能没有重叠区域，这里的mask=0时候就是没有重叠区域的情况
     mask = tf.cast(intersection[:, :, :, 0] > 0, tf.float32) * tf.cast(intersection[:, :, :, 1] > 0, tf.float32)
     
     inter_square = mask * inter_square
     
-    #calculate the boxs1 square and boxs2 square
+    # 分别计算predict box和label box各自的面积
     square1 = (boxes1[:, :, :, 2] - boxes1[:, :, :, 0]) * (boxes1[:, :, :, 3] - boxes1[:, :, :, 1])
     square2 = (boxes2[2] - boxes2[0]) * (boxes2[3] - boxes2[1])
-    
+
+    # 计算并返回IoU的值，返回的tensor的shape 是(cell_size,cell_size,box_pre_cell) 如7*7*2
     return inter_square/(square1 + square2 - inter_square + 1e-6)
 
-  def cond1(self, num, object_num, loss, predict, label, nilboy):
+  def cond1(self, num, object_num, loss, predict, label):
     """
        num初始值为0
        依次处理每个object
@@ -153,9 +153,9 @@ class YoloTinyNet(Net):
     return num < object_num
 
 
-  def body1(self, num, object_num, loss, predict, labels, nilboy):
+  def body1(self, num, object_num, loss, predict, labels):
     """
-    计算损失
+    每次计算一张图片中的一个object的损失
     Args:
       predict: 3-D tensor [cell_size, cell_size, 5 * boxes_per_cell]
       labels : [max_objects, 5]  (x_center, y_center, w, h, class)
@@ -163,8 +163,8 @@ class YoloTinyNet(Net):
     label = labels[num:num+1, :]   # 取第num个object的label：(x_center, y_center, w, h, class)
     label = tf.reshape(label, [-1])
 
-    # 1.计算有物体的那些格子坐标，即标记出物体覆盖到的那些格子（用于计算物体检测损失）
-    # 将label的坐标由[x_center, y_center, w, h]转为以格子坐标表示的坐标值
+    # ==1==.计算有物体的那些格子坐标，即标记出物体覆盖到的那些格子（用于计算物体检测损失）
+    # 根据label的坐标[x_center, y_center, w, h]和格子的数目计算以格子坐标表示的坐标值
     min_x = (label[0] - label[2] / 2) / (self.image_size / self.cell_size)
     max_x = (label[0] + label[2] / 2) / (self.image_size / self.cell_size)
     min_y = (label[1] - label[3] / 2) / (self.image_size / self.cell_size)
@@ -185,11 +185,11 @@ class YoloTinyNet(Net):
 
     paddings = tf.reshape(paddings, (2, 2))
     # 这里得到的objects就是一个‘尺寸’为cell_size*cell_size,并且有物体的区域标为1,无物体区域标为0
-    # 参数 CONSTANT 表示用0填充
+    # paddings的shape为[n,2]，n为待填充的tensor的秩，‘CONSTANT’表示使用0填充
     objects = tf.pad(objects, paddings, "CONSTANT")
 
-    # 2.计算responsible tensor，实际上是标记出物体中心所在的格子 （用于计算坐标损失）
-    # 将Bbox的中心坐标转为格子坐标
+    # ==2==.使用label Bbox计算responsible tensor，实际上是标记出物体中心所在的格子 （用于计算坐标损失）
+    # 将label Bbox的中心由像素坐标转为格子坐标
     center_x = label[0] / (self.image_size / self.cell_size)
     center_x = tf.floor(center_x)
     center_y = label[1] / (self.image_size / self.cell_size)
@@ -201,20 +201,26 @@ class YoloTinyNet(Net):
     temp = tf.reshape(temp, (2, 2))
     response = tf.pad(response, temp, "CONSTANT")
 
-    # 3.计算 iou_predict_truth [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
-    # shape of predict:[CELL_SIZE,CELL_SIZE,CLASS_NUM+BOX_NUM+BOX_NUM*4]
-    predict_boxes = predict[:, :, self.num_classes + self.boxes_per_cell:] # box坐标，坐标是相对当前格子左上角的偏移量归一化值
+    # ==3==.计算预测Bbox和label Bbox的IoU iou_predict_truth [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
+    # predict的shape为:[cell_size,cell_size,class_num+box_num*5]
+    # 这里需要明确网络预测(inference方法)的返回predict中的坐标是‘偏移+归一化后’的还是像素坐标，即明确其格式，在预测推理的时候要根据其格式‘转换’坐标值；
+    # 在下面第三行predict_boxes = predict_boxes * [self ... 这一行代码中可以看到对predict坐标做了一个‘反归一化和偏移的’计算；
+    # 所以网络输出的坐标确实是‘偏移+归一化’后的格式
+    # 因为在这里对坐标进行了‘反偏移和归一化’，所以在计算坐标损失的时候又重新进行了一次‘偏移和归一化’的步骤
+
+    predict_boxes = predict[:, :, self.num_classes + self.boxes_per_cell:]
 
     predict_boxes = tf.reshape(predict_boxes, [self.cell_size, self.cell_size, self.boxes_per_cell, 4])
 
-    # 将偏移+归一化的predict_boxes 由[x_offset_norm,y_offset_norm,w_norm,h_norm] 转换为[x_offset,y_offset,w,h](单位为像素值)
+    # 将偏移+归一化的predict_boxes 由[x_offset_norm,y_offset_norm,w_norm,h_norm] 转换为[x,y,w,h](单位为像素值)
+    # 1)‘反归一化’
     predict_boxes = predict_boxes * [self.image_size / self.cell_size, self.image_size / self.cell_size, self.image_size, self.image_size]
 
+    # 2)‘反偏移’
     # base_boxes 表示的是每个格子的坐标对应在图像中的像素坐标
     base_boxes = np.zeros([self.cell_size, self.cell_size, 4])
     for y in range(self.cell_size):
       for x in range(self.cell_size):
-        #nilboy
         base_boxes[y, x, :] = [self.image_size / self.cell_size * x, self.image_size / self.cell_size * y, 0, 0]
     
     # 扩展为2个Bbox
@@ -223,77 +229,86 @@ class YoloTinyNet(Net):
     # 将predict_boxes 由[x_offset,y_offset,w,h](单位为像素值)转换为[x,y,w,h](单位为像素值)
     predict_boxes = base_boxes + predict_boxes
 
-    # ==now we got predict boxes with coordinate x,y,w,h with pixel scale==
+    # 计算IoU,返回的iou_predict_truth的shape为(cell_size,cell_size,box_pre_cell)
+    iou_predict_truth = self.iou(predict_boxes, label[0:4])
 
-    # 计算IoU
-    iou_predict_truth = self.iou(predict_boxes, label[0:4]) 
-    # iou_predict_truth with shape [CELL_SIZE,CELL_SIZE,BOX_NUM],and the element is IoU value
-
-
-    #calculate C [cell_size, cell_size, boxes_per_cell]
+    # C tensor:responsible格子（物体中心落在的那个格子）的两个Bbox的IoU值，shape： [cell_size, cell_size, boxes_per_cell]
     C = iou_predict_truth * tf.reshape(response, [self.cell_size, self.cell_size, 1])
 
-    #calculate I tensor [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
-    I = iou_predict_truth * tf.reshape(response, (self.cell_size, self.cell_size, 1)) 
-    
-    max_I = tf.reduce_max(I, 2, keep_dims=True) #get the box with max IoU
+    # I tensor:responsible格子（物体中心落在的那个格子）的两个Bbox的IoU值，shape： [cell_size, cell_size, boxes_per_cell]
+    I = iou_predict_truth * tf.reshape(response, (self.cell_size, self.cell_size, 1))
+    # 获取最大的IoU的值, max_I的shape: (cell_size,cell_size,1)
+    max_I = tf.reduce_max(I, 2, keep_dims=True)
 
+    # 这里的 I 的shape是(cell_size,cell_size,box_per_cell)，其含义是IoU最大的那个Bbox在tensor中的位置，所在位置为1,其他为0
+    # 经过这一步，也就得到了文章中说的'the jth bounding box predictor in cell i is “responsible”for that prediction'
+    # 也就是物体中心所落在的那个格子给出的N预测Bboxes中与label_box之间IoU最大的那个Bbox
     I = tf.cast((I >= max_I), tf.float32) * tf.reshape(response, (self.cell_size, self.cell_size, 1))
 
-    #calculate no_I tensor [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
+    # no_I是与I的shape相同，但取值相反的tensor
+    # 这一步得到了文章中的noobj
     no_I = tf.ones_like(I, dtype=tf.float32) - I 
 
-
+    # p_C 这里是Bbox中有物体的概率
     p_C = predict[:, :, self.num_classes:self.num_classes + self.boxes_per_cell]
 
-    #calculate truth x,y,sqrt_w,sqrt_h 0-D
+    # ==4== 计算Loss
+    # （1）准备计算坐标损失的相关数据
     x = label[0]
     y = label[1]
-
+    # 文章中在计算坐标损失的w，h项作了开平方缩放
     sqrt_w = tf.sqrt(tf.abs(label[2]))
     sqrt_h = tf.sqrt(tf.abs(label[3]))
 
-
-    #calculate predict p_x, p_y, p_sqrt_w, p_sqrt_h 3-D [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
+    # predict p_x, p_y, p_sqrt_w, p_sqrt_h 3-D [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
     p_x = predict_boxes[:, :, :, 0]
     p_y = predict_boxes[:, :, :, 1]
 
     p_sqrt_w = tf.sqrt(tf.minimum(self.image_size * 1.0, tf.maximum(0.0, predict_boxes[:, :, :, 2])))
     p_sqrt_h = tf.sqrt(tf.minimum(self.image_size * 1.0, tf.maximum(0.0, predict_boxes[:, :, :, 3])))
 
-    #calculate truth p 1-D tensor [NUM_CLASSES]
+    # （2）准备计算类别损失的相关数据
+    # 将lebel中的类别ID转为one_hot编码
     P = tf.one_hot(tf.cast(label[4], tf.int32), self.num_classes, dtype=tf.float32)
 
     #calculate predict p_P 3-D tensor [CELL_SIZE, CELL_SIZE, NUM_CLASSES]
     p_P = predict[:, :, 0:self.num_classes]
 
-    #class_loss
+    # （3）分别计算类别损失、物体检测损失和坐标损失
+    # 类别损失(class_loss)
+    # 每个cell会给出N个预测的Bbox，比如2个，但是只有一组物体类别的概率
+    # 计算类别损失的时候只计算出现了物体的那些格子的损失，所以这里用到了objects
+    # class_scale 是类别损失的权重，论文中的Loss公式没有写出这个参数，默认为1,实际上在train.cfg中class_scale设置的是1.
     class_loss = tf.nn.l2_loss(tf.reshape(objects, (self.cell_size, self.cell_size, 1)) * (p_P - P)) * self.class_scale
     #class_loss = tf.nn.l2_loss(tf.reshape(response, (self.cell_size, self.cell_size, 1)) * (p_P - P)) * self.class_scale
 
-    #object_loss
-    object_loss = tf.nn.l2_loss(I * (p_C - C)) * self.object_scale #p_C-C ,C is the IoU value,can be treat as the obejctness score
-    #object_loss = tf.nn.l2_loss(I * (p_C - (C + 1.0)/2.0)) * self.object_scale
+    # 物体检测loss(object_loss & noobject_loss)
+    # 物体检测loss分成两类，一是responsible的那一个Bbox，称为object_loss，二是其他的Bbox,称为noobject_loss
+    # 这里计算损失的时候用p_C - C，p_C是模型预测的Bbox中有无物体的概率，C是物体中心所在的那个格子的的Bbox的IoU值
+    # 这里实际山是用IoU的值代替有无物体的ground_truth值
+    object_loss = tf.nn.l2_loss(I * (p_C - C)) * self.object_scale
 
-    #noobject_loss
-    #noobject_loss = tf.nn.l2_loss(no_I * (p_C - C)) * self.noobject_scale
+    # noobject_loss
+    # 对于这些‘noobject’的Bbox，理想的情况下是将他们都预测为无物体，也就是p_C值越小越好
+    # 所以这里可以直接使用预测的Bbox有物体的概率p_C来计算损失
     noobject_loss = tf.nn.l2_loss(no_I * (p_C)) * self.noobject_scale
 
-    #coord_loss
+    # 坐标损失(coord_loss)
+    # 计算坐标损失的时候，对格子中心坐标用的时候中心相对于所在格子左上角的偏移量并以格子宽度进行归一化后的值
+    # 对宽高用的是原始宽高使用图片宽高进行归一化后的值
     coord_loss = (tf.nn.l2_loss(I * (p_x - x)/(self.image_size/self.cell_size)) +
                  tf.nn.l2_loss(I * (p_y - y)/(self.image_size/self.cell_size)) +
                  tf.nn.l2_loss(I * (p_sqrt_w - sqrt_w))/ self.image_size +
                  tf.nn.l2_loss(I * (p_sqrt_h - sqrt_h))/self.image_size) * self.coord_scale
 
-    nilboy = I
+    #nilboy = I
 
-    return num + 1, object_num, [loss[0] + class_loss, loss[1] + object_loss, loss[2] + noobject_loss, loss[3] + coord_loss], predict, labels, nilboy
+    return num + 1, object_num, [loss[0] + class_loss, loss[1] + object_loss, loss[2] + noobject_loss, loss[3] + coord_loss], predict, labels, #nilboy
 
 
 
   def loss(self, predicts, labels, objects_num):
-    """计算Loss值
-
+    """计算Loss
     Args:
       predicts: 4-D tensor [batch_size, cell_size, cell_size, 5 * boxes_per_cell]
       ===> (num_classes, boxes_per_cell, 4 * boxes_per_cell)
@@ -303,32 +318,36 @@ class YoloTinyNet(Net):
     # 损失函数由三部分构成：类别损失，物体检测损失（有物体，无物体），Bbox坐标损失
     class_loss = tf.constant(0, tf.float32)    # 类别损失
     object_loss = tf.constant(0, tf.float32)   # 有物体的损失
-    noobject_loss = tf.constant(0, tf.float32) # 非物体的损失
+    noobject_loss = tf.constant(0, tf.float32) # 无物体的损失
     coord_loss = tf.constant(0, tf.float32)    # 坐标损失
     loss = [0, 0, 0, 0]
     for i in range(self.batch_size):
       predict = predicts[i, :, :, :] # 每张图片的prediction tensor
       label = labels[i, :, :]
       object_num = objects_num[i] # 图片中的物体的数目
-      nilboy = tf.ones([7,7,2])
-      # tf.while_loop(cond, body, var)
+      #nilboy = tf.ones([7,7,2])
+
+      # 关于tf.while_loop(cond, body, var)
       # loop（var 中满足cond的条件，带入body计算），loop结束，返回结果。
       # >>> i = tf.constant(0)
       # >>> c = lambda i: tf.less(i, 10)
       # >>> b = lambda i: tf.add(i, 1)
       # >>> r = tf.while_loop(c, b, [i])
 
-      tuple_results = tf.while_loop(self.cond1, self.body1, [tf.constant(0), object_num, [class_loss, object_loss, noobject_loss, coord_loss], predict, label, nilboy])
+      # 这里的while_loop 循环的是多个object
+      tuple_results = tf.while_loop(self.cond1, self.body1, [tf.constant(0), object_num, [class_loss, object_loss, noobject_loss, coord_loss], predict, label])
+
       for j in range(4):
         loss[j] = loss[j] + tuple_results[2][j]
-      nilboy = tuple_results[5]
+      #nilboy = tuple_results[5]
 
     tf.add_to_collection('losses', (loss[0] + loss[1] + loss[2] + loss[3])/self.batch_size)
 
+    # 添加到summary
     tf.summary.scalar('class_loss', loss[0]/self.batch_size)
     tf.summary.scalar('object_loss', loss[1]/self.batch_size)
     tf.summary.scalar('noobject_loss', loss[2]/self.batch_size)
     tf.summary.scalar('coord_loss', loss[3]/self.batch_size)
     tf.summary.scalar('weight_loss', tf.add_n(tf.get_collection('losses')) - (loss[0] + loss[1] + loss[2] + loss[3])/self.batch_size )
 
-    return tf.add_n(tf.get_collection('losses'), name='total_loss'), nilboy
+    return tf.add_n(tf.get_collection('losses'), name='total_loss')#, nilboy

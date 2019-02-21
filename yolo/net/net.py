@@ -19,6 +19,8 @@ class Net(object):
     #trainable variable collection
     self.trainable_collection = []
 
+  # 这里参考了tensorflow官方tutorial代码CIFAR-10的写法
+  # https://github.com/tensorflow/models/blob/master/tutorials/image/cifar10/cifar10.py
   def _variable_on_cpu(self, name, shape, initializer, pretrain=True, train=True):
     """Helper to create a Variable stored on CPU memory.
 

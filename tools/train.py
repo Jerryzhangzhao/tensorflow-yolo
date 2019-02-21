@@ -29,4 +29,5 @@ net = eval(net_params['name'])(common_params, net_params)
 #yolo.solver.yolo_solver.YoloSolver
 solver = eval(solver_params['name'])(dataset, net, common_params, solver_params)
 
+# 执行solve(),开始训练
 solver.solve()
