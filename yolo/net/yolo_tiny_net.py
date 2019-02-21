@@ -301,9 +301,7 @@ class YoloTinyNet(Net):
                  tf.nn.l2_loss(I * (p_sqrt_w - sqrt_w))/ self.image_size +
                  tf.nn.l2_loss(I * (p_sqrt_h - sqrt_h))/self.image_size) * self.coord_scale
 
-    #nilboy = I
-
-    return num + 1, object_num, [loss[0] + class_loss, loss[1] + object_loss, loss[2] + noobject_loss, loss[3] + coord_loss], predict, labels, #nilboy
+    return num + 1, object_num, [loss[0] + class_loss, loss[1] + object_loss, loss[2] + noobject_loss, loss[3] + coord_loss], predict, labels
 
 
 
@@ -325,7 +323,6 @@ class YoloTinyNet(Net):
       predict = predicts[i, :, :, :] # 每张图片的prediction tensor
       label = labels[i, :, :]
       object_num = objects_num[i] # 图片中的物体的数目
-      #nilboy = tf.ones([7,7,2])
 
       # 关于tf.while_loop(cond, body, var)
       # loop（var 中满足cond的条件，带入body计算），loop结束，返回结果。
@@ -339,7 +336,6 @@ class YoloTinyNet(Net):
 
       for j in range(4):
         loss[j] = loss[j] + tuple_results[2][j]
-      #nilboy = tuple_results[5]
 
     tf.add_to_collection('losses', (loss[0] + loss[1] + loss[2] + loss[3])/self.batch_size)
 
@@ -350,4 +346,4 @@ class YoloTinyNet(Net):
     tf.summary.scalar('coord_loss', loss[3]/self.batch_size)
     tf.summary.scalar('weight_loss', tf.add_n(tf.get_collection('losses')) - (loss[0] + loss[1] + loss[2] + loss[3])/self.batch_size )
 
-    return tf.add_n(tf.get_collection('losses'), name='total_loss')#, nilboy
+    return tf.add_n(tf.get_collection('losses'), name='total_loss')
